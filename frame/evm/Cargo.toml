@@ -26,7 +26,7 @@ scale-info = { version = "1.0.0", default-features = false, features = ["derive"
 sp-core = { version = "4.1.0-dev", git = "https://github.com/paritytech/substrate", tag = "monthly-2022-02", default-features = false }
 sp-runtime = { version = "4.1.0-dev", git = "https://github.com/paritytech/substrate", tag = "monthly-2022-02", default-features = false }
 sp-std = { version = "4.0.0-dev", git = "https://github.com/paritytech/substrate", tag = "monthly-2022-02", default-features = false }
-sp-io = { version = "4.0.0-dev", git = "https://github.com/paritytech/substrate", tag = "monthly-2022-02", , default-features = false }
+sp-io = { version = "4.0.0-dev", git = "https://github.com/paritytech/substrate", tag = "monthly-2022-02", default-features = false }
 
 frame-benchmarking = { version = "4.0.0-dev", git = "https://github.com/paritytech/substrate", tag = "monthly-2022-02", default-features = false, optional = true }
 frame-support = { version = "4.0.0-dev", git = "https://github.com/paritytech/substrate", tag = "monthly-2022-02", default-features = false }

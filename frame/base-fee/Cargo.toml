@@ -24,7 +24,7 @@ frame-system = { version = "4.0.0-dev", git = "https://github.com/paritytech/sub
 pallet-evm = { path = "../evm", default-features = false }
 
 [dev-dependencies]
-sp-io = { version = "4.0.0-dev", git = "https://github.com/paritytech/substrate", tag = "monthly-2022-02", , default-features = false }
+sp-io = { version = "4.0.0-dev", git = "https://github.com/paritytech/substrate", tag = "monthly-2022-02", default-features = false }
 
 
 [features]

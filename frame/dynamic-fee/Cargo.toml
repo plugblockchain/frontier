@@ -23,7 +23,7 @@ frame-support = { version = "4.0.0-dev", git = "https://github.com/paritytech/su
 pallet-evm = { path = "../evm", version = "6.0.0-dev", default-features = false }
 
 [dev-dependencies]
-sp-io = { version = "4.0.0-dev", git = "https://github.com/paritytech/substrate", tag = "monthly-2022-02", , default-features = false }
+sp-io = { version = "4.0.0-dev", git = "https://github.com/paritytech/substrate", tag = "monthly-2022-02", default-features = false }
 pallet-timestamp = { version = "4.0.0-dev", git = "https://github.com/paritytech/substrate", tag = "monthly-2022-02", default-features = false }
 
 

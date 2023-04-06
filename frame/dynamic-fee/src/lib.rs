@@ -17,11 +17,12 @@
 
 // Ensure we're `no_std` when compiling for Wasm.
 #![cfg_attr(not(feature = "std"), no_std)]
+#![deny(unused_crate_dependencies)]
 
 #[cfg(test)]
 mod tests;
 
-use frame_support::inherent::IsFatalError;
+use frame_support::{inherent::IsFatalError, traits::Get, weights::Weight};
 use sp_core::U256;
 use sp_inherents::{InherentData, InherentIdentifier};
 use sp_std::cmp::{max, min};
@@ -40,7 +41,7 @@ pub mod pallet {
 	#[pallet::pallet]
 	#[pallet::generate_store(pub(super) trait Store)]
 	#[pallet::without_storage_info]
-	pub struct Pallet<T>(_);
+	pub struct Pallet<T>(PhantomData<T>);
 
 	#[pallet::config]
 	pub trait Config: frame_system::Config {
@@ -71,6 +72,7 @@ pub mod pallet {
 
 	#[pallet::call]
 	impl<T: Config> Pallet<T> {
+		#[pallet::call_index(0)]
 		#[pallet::weight((T::DbWeight::get().writes(1), DispatchClass::Mandatory))]
 		pub fn note_min_gas_price_target(origin: OriginFor<T>, target: U256) -> DispatchResult {
 			ensure_none(origin)?;
@@ -85,17 +87,9 @@ pub mod pallet {
 	}
 
 	#[pallet::genesis_config]
+	#[cfg_attr(feature = "std", derive(Default))]
 	pub struct GenesisConfig {
 		pub min_gas_price: U256,
-	}
-
-	#[cfg(feature = "std")]
-	impl Default for GenesisConfig {
-		fn default() -> Self {
-			Self {
-				min_gas_price: Default::default(),
-			}
-		}
 	}
 
 	#[pallet::genesis_build]
@@ -144,7 +138,7 @@ pub mod pallet {
 }
 
 impl<T: Config> fp_evm::FeeCalculator for Pallet<T> {
-	fn min_gas_price() -> U256 {
-		MinGasPrice::<T>::get()
+	fn min_gas_price() -> (U256, Weight) {
+		(MinGasPrice::<T>::get(), T::DbWeight::get().reads(1))
 	}
 }

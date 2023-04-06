@@ -16,16 +16,18 @@
 // limitations under the License.
 
 #![cfg_attr(not(feature = "std"), no_std)]
+#![allow(clippy::comparison_chain)]
+#![deny(unused_crate_dependencies)]
 
 extern crate alloc;
 
-use alloc::vec::Vec;
-use core::{cmp::max, ops::BitAnd};
+use alloc::{vec, vec::Vec};
+use core::cmp::max;
 
-use num::{BigUint, FromPrimitive, One, ToPrimitive, Zero};
+use num::{BigUint, FromPrimitive, Integer, One, ToPrimitive, Zero};
 
 use fp_evm::{
-	Context, ExitError, ExitSucceed, Precompile, PrecompileFailure, PrecompileOutput,
+	ExitError, ExitSucceed, Precompile, PrecompileFailure, PrecompileHandle, PrecompileOutput,
 	PrecompileResult,
 };
 
@@ -37,9 +39,10 @@ const MIN_GAS_COST: u64 = 200;
 // https://eips.ethereum.org/EIPS/eip-2565
 fn calculate_gas_cost(
 	base_length: u64,
-	exp_length: u64,
 	mod_length: u64,
 	exponent: &BigUint,
+	exponent_bytes: &[u8],
+	mod_is_even: bool,
 ) -> u64 {
 	fn calculate_multiplication_complexity(base_length: u64, mod_length: u64) -> u64 {
 		let max_length = max(base_length, mod_length);
@@ -55,18 +58,15 @@ fn calculate_gas_cost(
 		words * words
 	}
 
-	fn calculate_iteration_count(exp_length: u64, exponent: &BigUint) -> u64 {
+	fn calculate_iteration_count(exponent: &BigUint, exponent_bytes: &[u8]) -> u64 {
 		let mut iteration_count: u64 = 0;
+		let exp_length = exponent_bytes.len() as u64;
 
 		if exp_length <= 32 && exponent.is_zero() {
 			iteration_count = 0;
 		} else if exp_length <= 32 {
 			iteration_count = exponent.bits() - 1;
 		} else if exp_length > 32 {
-			// construct BigUint to represent (2^256) - 1
-			let bytes: [u8; 32] = [0xFF; 32];
-			let max_256_bit_uint = BigUint::from_bytes_be(&bytes);
-
 			// from the EIP spec:
 			// (8 * (exp_length - 32)) + ((exponent & (2**256 - 1)).bit_length() - 1)
 			//
@@ -76,21 +76,41 @@ fn calculate_gas_cost(
 			//   must be > 0)
 			// * the addition can't overflow because the terms are both capped at roughly
 			//   8 * max size of exp_length (1024)
-			iteration_count =
-				(8 * (exp_length - 32)) + exponent.bitand(max_256_bit_uint).bits() - 1;
+			// * the EIP spec is written in python, in which (exponent & (2**256 - 1)) takes the
+			//   FIRST 32 bytes. However this `BigUint` `&` operator takes the LAST 32 bytes.
+			//   We thus instead take the bytes manually.
+			let exponent_head = BigUint::from_bytes_be(&exponent_bytes[..32]);
+
+			iteration_count = (8 * (exp_length - 32)) + exponent_head.bits() - 1;
 		}
 
 		max(iteration_count, 1)
 	}
 
 	let multiplication_complexity = calculate_multiplication_complexity(base_length, mod_length);
-	let iteration_count = calculate_iteration_count(exp_length, exponent);
-	let gas = max(
+	let iteration_count = calculate_iteration_count(exponent, exponent_bytes);
+	max(
 		MIN_GAS_COST,
 		multiplication_complexity * iteration_count / 3,
-	);
+	)
+	.saturating_mul(if mod_is_even { 20 } else { 1 })
+}
 
-	gas
+/// Copy bytes from input to target.
+fn read_input(source: &[u8], target: &mut [u8], source_offset: &mut usize) {
+	// We move the offset by the len of the target, regardless of what we
+	// actually copy.
+	let offset = *source_offset;
+	*source_offset += target.len();
+
+	// Out of bounds, nothing to copy.
+	if source.len() <= offset {
+		return;
+	}
+
+	// Find len to copy up to target len, but not out of bounds.
+	let len = core::cmp::min(target.len(), source.len() - offset);
+	target[..len].copy_from_slice(&source[offset..][..len]);
 }
 
 // ModExp expects the following as inputs:
@@ -110,40 +130,37 @@ fn calculate_gas_cost(
 //       see: https://eips.ethereum.org/EIPS/eip-198
 
 impl Precompile for Modexp {
-	fn execute(
-		input: &[u8],
-		target_gas: Option<u64>,
-		_context: &Context,
-		_is_static: bool,
-	) -> PrecompileResult {
-		if input.len() < 96 {
-			return Err(PrecompileFailure::Error {
-				exit_status: ExitError::Other("input must contain at least 96 bytes".into()),
-			});
-		};
+	fn execute(handle: &mut impl PrecompileHandle) -> PrecompileResult {
+		let input = handle.input();
+		let mut input_offset = 0;
+
+		// Yellowpaper: whenever the input is too short, the missing bytes are
+		// considered to be zero.
+		let mut base_len_buf = [0u8; 32];
+		read_input(input, &mut base_len_buf, &mut input_offset);
+		let mut exp_len_buf = [0u8; 32];
+		read_input(input, &mut exp_len_buf, &mut input_offset);
+		let mut mod_len_buf = [0u8; 32];
+		read_input(input, &mut mod_len_buf, &mut input_offset);
 
 		// reasonable assumption: this must fit within the Ethereum EVM's max stack size
 		let max_size_big = BigUint::from_u32(1024).expect("can't create BigUint");
 
-		let mut buf = [0; 32];
-		buf.copy_from_slice(&input[0..32]);
-		let base_len_big = BigUint::from_bytes_be(&buf);
+		let base_len_big = BigUint::from_bytes_be(&base_len_buf);
 		if base_len_big > max_size_big {
 			return Err(PrecompileFailure::Error {
 				exit_status: ExitError::Other("unreasonably large base length".into()),
 			});
 		}
 
-		buf.copy_from_slice(&input[32..64]);
-		let exp_len_big = BigUint::from_bytes_be(&buf);
+		let exp_len_big = BigUint::from_bytes_be(&exp_len_buf);
 		if exp_len_big > max_size_big {
 			return Err(PrecompileFailure::Error {
 				exit_status: ExitError::Other("unreasonably large exponent length".into()),
 			});
 		}
 
-		buf.copy_from_slice(&input[64..96]);
-		let mod_len_big = BigUint::from_bytes_be(&buf);
+		let mod_len_big = BigUint::from_bytes_be(&mod_len_buf);
 		if mod_len_big > max_size_big {
 			return Err(PrecompileFailure::Error {
 				exit_status: ExitError::Other("unreasonably large modulus length".into()),
@@ -155,43 +172,47 @@ impl Precompile for Modexp {
 		let exp_len = exp_len_big.to_usize().expect("exp_len out of bounds");
 		let mod_len = mod_len_big.to_usize().expect("mod_len out of bounds");
 
-		// input length should be at least 96 + user-specified length of base + exp + mod
-		let total_len = base_len + exp_len + mod_len + 96;
-		if input.len() < total_len {
-			return Err(PrecompileFailure::Error {
-				exit_status: ExitError::Other("insufficient input size".into()),
+		// if mod_len is 0 output must be empty
+		if mod_len == 0 {
+			return Ok(PrecompileOutput {
+				exit_status: ExitSucceed::Returned,
+				output: vec![],
 			});
 		}
 
 		// Gas formula allows arbitrary large exp_len when base and modulus are empty, so we need to handle empty base first.
-		let (r, gas_cost) = if base_len == 0 && mod_len == 0 {
-			(BigUint::zero(), MIN_GAS_COST)
+		let r = if base_len == 0 && mod_len == 0 {
+			handle.record_cost(MIN_GAS_COST)?;
+			BigUint::zero()
 		} else {
 			// read the numbers themselves.
-			let base_start = 96; // previous 3 32-byte fields
-			let base = BigUint::from_bytes_be(&input[base_start..base_start + base_len]);
+			let mut base_buf = vec![0u8; base_len];
+			read_input(input, &mut base_buf, &mut input_offset);
+			let base = BigUint::from_bytes_be(&base_buf);
 
-			let exp_start = base_start + base_len;
-			let exponent = BigUint::from_bytes_be(&input[exp_start..exp_start + exp_len]);
+			let mut exp_buf = vec![0u8; exp_len];
+			read_input(input, &mut exp_buf, &mut input_offset);
+			let exponent = BigUint::from_bytes_be(&exp_buf);
+
+			let mut mod_buf = vec![0u8; mod_len];
+			read_input(input, &mut mod_buf, &mut input_offset);
+			let modulus = BigUint::from_bytes_be(&mod_buf);
 
 			// do our gas accounting
-			let gas_cost =
-				calculate_gas_cost(base_len as u64, exp_len as u64, mod_len as u64, &exponent);
-			if let Some(gas_left) = target_gas {
-				if gas_left < gas_cost {
-					return Err(PrecompileFailure::Error {
-						exit_status: ExitError::OutOfGas,
-					});
-				}
-			};
+			let gas_cost = calculate_gas_cost(
+				base_len as u64,
+				mod_len as u64,
+				&exponent,
+				&exp_buf,
+				modulus.is_even(),
+			);
 
-			let mod_start = exp_start + exp_len;
-			let modulus = BigUint::from_bytes_be(&input[mod_start..mod_start + mod_len]);
+			handle.record_cost(gas_cost)?;
 
 			if modulus.is_zero() || modulus.is_one() {
-				(BigUint::zero(), gas_cost)
+				BigUint::zero()
 			} else {
-				(base.modpow(&exponent, &modulus), gas_cost)
+				base.modpow(&exponent, &modulus)
 			}
 		};
 
@@ -203,9 +224,7 @@ impl Precompile for Modexp {
 		if bytes.len() == mod_len {
 			Ok(PrecompileOutput {
 				exit_status: ExitSucceed::Returned,
-				cost: gas_cost,
 				output: bytes.to_vec(),
-				logs: Default::default(),
 			})
 		} else if bytes.len() < mod_len {
 			let mut ret = Vec::with_capacity(mod_len);
@@ -213,9 +232,7 @@ impl Precompile for Modexp {
 			ret.extend_from_slice(&bytes[..]);
 			Ok(PrecompileOutput {
 				exit_status: ExitSucceed::Returned,
-				cost: gas_cost,
 				output: ret.to_vec(),
-				logs: Default::default(),
 			})
 		} else {
 			Err(PrecompileFailure::Error {
@@ -229,7 +246,8 @@ impl Precompile for Modexp {
 mod tests {
 	use super::*;
 	extern crate hex;
-	use pallet_evm_test_vector_support::test_precompile_test_vectors;
+	use fp_evm::Context;
+	use pallet_evm_test_vector_support::{test_precompile_test_vectors, MockHandle};
 
 	#[test]
 	fn process_consensus_tests() -> Result<(), String> {
@@ -238,8 +256,8 @@ mod tests {
 	}
 
 	#[test]
-	fn test_empty_input() -> Result<(), PrecompileFailure> {
-		let input: [u8; 0] = [];
+	fn test_empty_input() {
+		let input = Vec::new();
 
 		let cost: u64 = 1;
 
@@ -249,26 +267,20 @@ mod tests {
 			apparent_value: From::from(0),
 		};
 
-		match Modexp::execute(&input, Some(cost), &context, false) {
-			Ok(_) => {
-				panic!("Test not expected to pass");
+		let mut handle = MockHandle::new(input, Some(cost), context);
+
+		match Modexp::execute(&mut handle) {
+			Ok(precompile_result) => {
+				assert_eq!(precompile_result.output.len(), 0);
 			}
-			Err(e) => {
-				assert_eq!(
-					e,
-					PrecompileFailure::Error {
-						exit_status: ExitError::Other(
-							"input must contain at least 96 bytes".into()
-						)
-					}
-				);
-				Ok(())
+			Err(_) => {
+				panic!("Modexp::execute() returned error"); // TODO: how to pass error on?
 			}
 		}
 	}
 
 	#[test]
-	fn test_insufficient_input() -> Result<(), PrecompileFailure> {
+	fn test_insufficient_input() {
 		let input = hex::decode(
 			"0000000000000000000000000000000000000000000000000000000000000001\
 			0000000000000000000000000000000000000000000000000000000000000001\
@@ -284,18 +296,15 @@ mod tests {
 			apparent_value: From::from(0),
 		};
 
-		match Modexp::execute(&input, Some(cost), &context, false) {
-			Ok(_) => {
-				panic!("Test not expected to pass");
+		let mut handle = MockHandle::new(input, Some(cost), context);
+
+		match Modexp::execute(&mut handle) {
+			Ok(precompile_result) => {
+				assert_eq!(precompile_result.output.len(), 1);
+				assert_eq!(precompile_result.output, vec![0x00]);
 			}
-			Err(e) => {
-				assert_eq!(
-					e,
-					PrecompileFailure::Error {
-						exit_status: ExitError::Other("insufficient input size".into())
-					}
-				);
-				Ok(())
+			Err(_) => {
+				panic!("Modexp::execute() returned error"); // TODO: how to pass error on?
 			}
 		}
 	}
@@ -317,7 +326,9 @@ mod tests {
 			apparent_value: From::from(0),
 		};
 
-		match Modexp::execute(&input, Some(cost), &context, false) {
+		let mut handle = MockHandle::new(input, Some(cost), context);
+
+		match Modexp::execute(&mut handle) {
 			Ok(_) => {
 				panic!("Test not expected to pass");
 			}
@@ -355,7 +366,9 @@ mod tests {
 			apparent_value: From::from(0),
 		};
 
-		match Modexp::execute(&input, Some(cost), &context, false) {
+		let mut handle = MockHandle::new(input, Some(cost), context);
+
+		match Modexp::execute(&mut handle) {
 			Ok(precompile_result) => {
 				assert_eq!(precompile_result.output.len(), 1); // should be same length as mod
 				let result = BigUint::from_bytes_be(&precompile_result.output[..]);
@@ -390,7 +403,9 @@ mod tests {
 			apparent_value: From::from(0),
 		};
 
-		match Modexp::execute(&input, Some(cost), &context, false) {
+		let mut handle = MockHandle::new(input, Some(cost), context);
+
+		match Modexp::execute(&mut handle) {
 			Ok(precompile_result) => {
 				assert_eq!(precompile_result.output.len(), 32); // should be same length as mod
 				let result = BigUint::from_bytes_be(&precompile_result.output[..]);
@@ -423,7 +438,9 @@ mod tests {
 			apparent_value: From::from(0),
 		};
 
-		match Modexp::execute(&input, Some(cost), &context, false) {
+		let mut handle = MockHandle::new(input, Some(cost), context);
+
+		match Modexp::execute(&mut handle) {
 			Ok(precompile_result) => {
 				assert_eq!(precompile_result.output.len(), 32); // should be same length as mod
 				let result = BigUint::from_bytes_be(&precompile_result.output[..]);
@@ -462,12 +479,46 @@ mod tests {
 			apparent_value: From::from(0),
 		};
 
-		let precompile_result = Modexp::execute(&input, Some(cost), &context, false)
-			.expect("Modexp::execute() returned error");
+		let mut handle = MockHandle::new(input, Some(cost), context);
+
+		let precompile_result =
+			Modexp::execute(&mut handle).expect("Modexp::execute() returned error");
 
 		assert_eq!(precompile_result.output.len(), 1); // should be same length as mod
 		let result = BigUint::from_bytes_be(&precompile_result.output[..]);
 		let expected = BigUint::parse_bytes(b"0", 10).unwrap();
 		assert_eq!(result, expected);
+	}
+
+	#[test]
+	fn test_long_exp_gas_cost_matches_specs() {
+		let input = vec![
+			0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+			0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+			0, 0, 0, 0, 0, 38, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+			0, 0, 0, 0, 0, 0, 0, 0, 96, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+			16, 0, 0, 0, 255, 255, 255, 2, 0, 0, 179, 0, 0, 2, 0, 0, 122, 0, 0, 0, 0, 0, 0, 0, 0,
+			0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+			0, 0, 0, 0, 0, 0, 0, 0, 255, 251, 0, 0, 0, 0, 4, 38, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+			0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+			0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+			0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 96, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+			0, 0, 0, 0, 0, 0, 0, 16, 0, 0, 0, 255, 255, 255, 2, 0, 0, 179, 0, 0, 0, 0, 0, 0, 0, 0,
+			0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+			0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 255,
+			255, 255, 255, 249,
+		];
+
+		let context: Context = Context {
+			address: Default::default(),
+			caller: Default::default(),
+			apparent_value: From::from(0),
+		};
+
+		let mut handle = MockHandle::new(input, Some(100_000), context);
+
+		let _ = Modexp::execute(&mut handle).expect("Modexp::execute() returned error");
+
+		assert_eq!(handle.gas_used, 7104 * 20); // gas used when ran in geth (x20)
 	}
 }

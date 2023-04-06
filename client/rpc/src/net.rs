@@ -18,25 +18,27 @@
 
 use std::sync::Arc;
 
-use ethereum_types::H256;
-use jsonrpc_core::Result;
-use sc_network::{ExHashT, NetworkService};
+use jsonrpsee::core::RpcResult as Result;
+// Substrate
+use sc_network::NetworkService;
+use sc_network_common::{service::NetworkPeers, ExHashT};
 use sp_api::ProvideRuntimeApi;
 use sp_blockchain::HeaderBackend;
-use sp_runtime::{generic::BlockId, traits::Block as BlockT};
-
-use fc_rpc_core::{types::PeerCount, NetApi as NetApiT};
+use sp_runtime::traits::Block as BlockT;
+// Frontier
+use fc_rpc_core::{types::PeerCount, NetApiServer};
 use fp_rpc::EthereumRuntimeRPCApi;
 
 use crate::internal_err;
 
-pub struct NetApi<B: BlockT, C, H: ExHashT> {
+/// Net API implementation.
+pub struct Net<B: BlockT, C, H: ExHashT> {
 	client: Arc<C>,
 	network: Arc<NetworkService<B, H>>,
 	peer_count_as_hex: bool,
 }
 
-impl<B: BlockT, C, H: ExHashT> NetApi<B, C, H> {
+impl<B: BlockT, C, H: ExHashT> Net<B, C, H> {
 	pub fn new(
 		client: Arc<C>,
 		network: Arc<NetworkService<B, H>>,
@@ -50,24 +52,25 @@ impl<B: BlockT, C, H: ExHashT> NetApi<B, C, H> {
 	}
 }
 
-impl<B, C, H: ExHashT> NetApiT for NetApi<B, C, H>
+impl<B, C, H: ExHashT> NetApiServer for Net<B, C, H>
 where
-	B: BlockT<Hash = H256> + Send + Sync + 'static,
-	C: HeaderBackend<B> + ProvideRuntimeApi<B> + Send + Sync + 'static,
+	B: BlockT,
+	C: ProvideRuntimeApi<B>,
 	C::Api: EthereumRuntimeRPCApi<B>,
+	C: HeaderBackend<B> + 'static,
 {
 	fn version(&self) -> Result<String> {
 		let hash = self.client.info().best_hash;
 		Ok(self
 			.client
 			.runtime_api()
-			.chain_id(&BlockId::Hash(hash))
+			.chain_id(hash)
 			.map_err(|_| internal_err("fetch runtime chain id failed"))?
 			.to_string())
 	}
 
 	fn peer_count(&self) -> Result<PeerCount> {
-		let peer_count = self.network.num_connected();
+		let peer_count = self.network.sync_num_connected();
 		Ok(match self.peer_count_as_hex {
 			true => PeerCount::String(format!("0x{:x}", peer_count)),
 			false => PeerCount::U32(peer_count as u32),

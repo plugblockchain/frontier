@@ -18,18 +18,16 @@
 
 use std::{marker::PhantomData, sync::Arc};
 
-use codec::Decode;
 use ethereum_types::{H160, H256, U256};
-
-use sc_client_api::backend::{Backend, StateBackend, StorageProvider};
-use sp_api::BlockId;
-use sp_runtime::{
-	traits::{BlakeTwo256, Block as BlockT},
-	Permill,
-};
+use scale_codec::Decode;
+// Substrate
+use sc_client_api::backend::{Backend, StorageProvider};
+use sp_blockchain::HeaderBackend;
+use sp_runtime::{traits::Block as BlockT, Permill};
 use sp_storage::StorageKey;
-
+// Frontier
 use fp_rpc::TransactionStatus;
+use fp_storage::*;
 
 use super::{blake2_128_extend, storage_prefix_build, StorageOverride};
 
@@ -50,13 +48,12 @@ impl<B: BlockT, C, BE> SchemaV3Override<B, C, BE> {
 
 impl<B, C, BE> SchemaV3Override<B, C, BE>
 where
-	B: BlockT<Hash = H256> + Send + Sync + 'static,
-	C: StorageProvider<B, BE> + Send + Sync + 'static,
+	B: BlockT,
+	C: HeaderBackend<B> + StorageProvider<B, BE> + 'static,
 	BE: Backend<B> + 'static,
-	BE::State: StateBackend<BlakeTwo256>,
 {
-	fn query_storage<T: Decode>(&self, id: &BlockId<B>, key: &StorageKey) -> Option<T> {
-		if let Ok(Some(data)) = self.client.storage(id, key) {
+	fn query_storage<T: Decode>(&self, block_hash: B::Hash, key: &StorageKey) -> Option<T> {
+		if let Ok(Some(data)) = self.client.storage(block_hash, key) {
 			if let Ok(result) = Decode::decode(&mut &data.0[..]) {
 				return Some(result);
 			}
@@ -67,71 +64,68 @@ where
 
 impl<B, C, BE> StorageOverride<B> for SchemaV3Override<B, C, BE>
 where
-	B: BlockT<Hash = H256> + Send + Sync + 'static,
-	C: StorageProvider<B, BE> + Send + Sync + 'static,
+	B: BlockT,
+	C: HeaderBackend<B> + StorageProvider<B, BE> + 'static,
 	BE: Backend<B> + 'static,
-	BE::State: StateBackend<BlakeTwo256>,
 {
 	/// For a given account address, returns pallet_evm::AccountCodes.
-	fn account_code_at(&self, block: &BlockId<B>, address: H160) -> Option<Vec<u8>> {
-		let mut key: Vec<u8> = storage_prefix_build(b"EVM", b"AccountCodes");
+	fn account_code_at(&self, block_hash: B::Hash, address: H160) -> Option<Vec<u8>> {
+		let mut key: Vec<u8> = storage_prefix_build(PALLET_EVM, EVM_ACCOUNT_CODES);
 		key.extend(blake2_128_extend(address.as_bytes()));
-		self.query_storage::<Vec<u8>>(block, &StorageKey(key))
+		self.query_storage::<Vec<u8>>(block_hash, &StorageKey(key))
 	}
 
 	/// For a given account address and index, returns pallet_evm::AccountStorages.
-	fn storage_at(&self, block: &BlockId<B>, address: H160, index: U256) -> Option<H256> {
+	fn storage_at(&self, block_hash: B::Hash, address: H160, index: U256) -> Option<H256> {
 		let tmp: &mut [u8; 32] = &mut [0; 32];
 		index.to_big_endian(tmp);
 
-		let mut key: Vec<u8> = storage_prefix_build(b"EVM", b"AccountStorages");
+		let mut key: Vec<u8> = storage_prefix_build(PALLET_EVM, EVM_ACCOUNT_STORAGES);
 		key.extend(blake2_128_extend(address.as_bytes()));
 		key.extend(blake2_128_extend(tmp));
 
-		self.query_storage::<H256>(block, &StorageKey(key))
+		self.query_storage::<H256>(block_hash, &StorageKey(key))
 	}
 
 	/// Return the current block.
-	fn current_block(&self, block: &BlockId<B>) -> Option<ethereum::BlockV2> {
+	fn current_block(&self, block_hash: B::Hash) -> Option<ethereum::BlockV2> {
 		self.query_storage::<ethereum::BlockV2>(
-			block,
-			&StorageKey(storage_prefix_build(b"Ethereum", b"CurrentBlock")),
-		)
-	}
-
-	/// Return the current receipt.
-	fn current_receipts(&self, block: &BlockId<B>) -> Option<Vec<ethereum::ReceiptV3>> {
-		self.query_storage::<Vec<ethereum::ReceiptV3>>(
-			block,
-			&StorageKey(storage_prefix_build(b"Ethereum", b"CurrentReceipts")),
-		)
-	}
-
-	/// Return the current transaction status.
-	fn current_transaction_statuses(&self, block: &BlockId<B>) -> Option<Vec<TransactionStatus>> {
-		self.query_storage::<Vec<TransactionStatus>>(
-			block,
+			block_hash,
 			&StorageKey(storage_prefix_build(
-				b"Ethereum",
-				b"CurrentTransactionStatuses",
+				PALLET_ETHEREUM,
+				ETHEREUM_CURRENT_BLOCK,
 			)),
 		)
 	}
 
-	/// Return the base fee at the given height.
-	fn base_fee(&self, block: &BlockId<B>) -> Option<U256> {
-		self.query_storage::<U256>(
-			block,
-			&StorageKey(storage_prefix_build(b"BaseFee", b"BaseFeePerGas")),
+	/// Return the current receipt.
+	fn current_receipts(&self, block_hash: B::Hash) -> Option<Vec<ethereum::ReceiptV3>> {
+		self.query_storage::<Vec<ethereum::ReceiptV3>>(
+			block_hash,
+			&StorageKey(storage_prefix_build(
+				PALLET_ETHEREUM,
+				ETHEREUM_CURRENT_RECEIPTS,
+			)),
+		)
+	}
+
+	/// Return the current transaction status.
+	fn current_transaction_statuses(&self, block_hash: B::Hash) -> Option<Vec<TransactionStatus>> {
+		self.query_storage::<Vec<TransactionStatus>>(
+			block_hash,
+			&StorageKey(storage_prefix_build(
+				PALLET_ETHEREUM,
+				ETHEREUM_CURRENT_TRANSACTION_STATUS,
+			)),
 		)
 	}
 
 	/// Return the elasticity at the given height.
-	fn elasticity(&self, block: &BlockId<B>) -> Option<Permill> {
+	fn elasticity(&self, block_hash: B::Hash) -> Option<Permill> {
 		let default_elasticity = Some(Permill::from_parts(125_000));
 		let elasticity = self.query_storage::<Permill>(
-			block,
-			&StorageKey(storage_prefix_build(b"BaseFee", b"Elasticity")),
+			block_hash,
+			&StorageKey(storage_prefix_build(PALLET_BASE_FEE, BASE_FEE_ELASTICITY)),
 		);
 		if elasticity.is_some() {
 			elasticity
@@ -140,7 +134,7 @@ where
 		}
 	}
 
-	fn is_eip1559(&self, _block: &BlockId<B>) -> bool {
+	fn is_eip1559(&self, _block_hash: B::Hash) -> bool {
 		true
 	}
 }

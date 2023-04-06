@@ -16,40 +16,52 @@
 // limitations under the License.
 
 #![cfg_attr(not(feature = "std"), no_std)]
+#![deny(unused_crate_dependencies)]
 
 extern crate alloc;
 
+#[cfg(test)]
+mod mock;
+
+#[cfg(test)]
+mod tests;
+
+use alloc::format;
 use core::marker::PhantomData;
 use fp_evm::{
-	Context, ExitError, ExitSucceed, Precompile, PrecompileFailure, PrecompileOutput,
+	ExitError, ExitSucceed, Precompile, PrecompileFailure, PrecompileHandle, PrecompileOutput,
 	PrecompileResult,
 };
 use frame_support::{
-	codec::Decode,
-	dispatch::{Dispatchable, GetDispatchInfo, PostDispatchInfo},
-	weights::{DispatchClass, Pays},
+	codec::{Decode, DecodeLimit as _},
+	dispatch::{DispatchClass, Dispatchable, GetDispatchInfo, Pays, PostDispatchInfo},
+	traits::{ConstU32, Get},
 };
 use pallet_evm::{AddressMapping, GasWeightMapping};
 
-pub struct Dispatch<T> {
-	_marker: PhantomData<T>,
+// `DecodeLimit` specifies the max depth a call can use when decoding, as unbounded depth
+// can be used to overflow the stack.
+// Default value is 8, which is the same as in XCM call decoding.
+pub struct Dispatch<T, DecodeLimit = ConstU32<8>> {
+	_marker: PhantomData<(T, DecodeLimit)>,
 }
 
-impl<T> Precompile for Dispatch<T>
+impl<T, DecodeLimit> Precompile for Dispatch<T, DecodeLimit>
 where
 	T: pallet_evm::Config,
-	T::Call: Dispatchable<PostInfo = PostDispatchInfo> + GetDispatchInfo + Decode,
-	<T::Call as Dispatchable>::Origin: From<Option<T::AccountId>>,
+	T::RuntimeCall: Dispatchable<PostInfo = PostDispatchInfo> + GetDispatchInfo + Decode,
+	<T::RuntimeCall as Dispatchable>::RuntimeOrigin: From<Option<T::AccountId>>,
+	DecodeLimit: Get<u32>,
 {
-	fn execute(
-		input: &[u8],
-		target_gas: Option<u64>,
-		context: &Context,
-		_is_static: bool,
-	) -> PrecompileResult {
-		let call = T::Call::decode(&mut &input[..]).map_err(|_| PrecompileFailure::Error {
-			exit_status: ExitError::Other("decode failed".into()),
-		})?;
+	fn execute(handle: &mut impl PrecompileHandle) -> PrecompileResult {
+		let input = handle.input();
+		let target_gas = handle.gas_limit();
+		let context = handle.context();
+
+		let call = T::RuntimeCall::decode_with_depth_limit(DecodeLimit::get(), &mut &*input)
+			.map_err(|_| PrecompileFailure::Error {
+				exit_status: ExitError::Other("decode failed".into()),
+			})?;
 		let info = call.get_dispatch_info();
 
 		let valid_call = info.pays_fee == Pays::Yes && info.class == DispatchClass::Normal;
@@ -60,7 +72,8 @@ where
 		}
 
 		if let Some(gas) = target_gas {
-			let valid_weight = info.weight <= T::GasWeightMapping::gas_to_weight(gas);
+			let valid_weight =
+				info.weight.ref_time() <= T::GasWeightMapping::gas_to_weight(gas, false).ref_time();
 			if !valid_weight {
 				return Err(PrecompileFailure::Error {
 					exit_status: ExitError::OutOfGas,
@@ -75,15 +88,18 @@ where
 				let cost = T::GasWeightMapping::weight_to_gas(
 					post_info.actual_weight.unwrap_or(info.weight),
 				);
+
+				handle.record_cost(cost)?;
+
 				Ok(PrecompileOutput {
 					exit_status: ExitSucceed::Stopped,
-					cost,
 					output: Default::default(),
-					logs: Default::default(),
 				})
 			}
-			Err(_) => Err(PrecompileFailure::Error {
-				exit_status: ExitError::Other("dispatch execution failed".into()),
+			Err(e) => Err(PrecompileFailure::Error {
+				exit_status: ExitError::Other(
+					format!("dispatch execution failed: {}", <&'static str>::from(e)).into(),
+				),
 			}),
 		}
 	}

@@ -1,71 +1,83 @@
 [package]
 name = "pallet-ethereum"
 version = "4.0.0-dev"
-authors = ["Parity Technologies <admin@parity.io>"]
-edition = "2021"
-description = "Ethereum compatibility full block processing emulation pallet for Substrate."
 license = "Apache-2.0"
+description = "Ethereum compatibility full block processing emulation pallet for Substrate."
+authors = { workspace = true }
+edition = { workspace = true }
+repository = { workspace = true }
+
+[package.metadata.docs.rs]
+targets = ["x86_64-unknown-linux-gnu"]
 
 [dependencies]
-ethereum = { version = "0.12.0", default-features = false, features = ["with-codec"] }
-ethereum-types = { version = "0.13.1", default-features = false }
-evm = { version = "0.35.0", features = ["with-codec"], default-features = false }
-rlp = { version = "0.5", default-features = false }
-serde = { version = "1.0.101", optional = true }
-sha3 = { version = "0.10", default-features = false }
+ethereum = { workspace = true, features = ["with-codec"] }
+ethereum-types = { workspace = true }
+evm = { workspace = true, features = ["with-codec"] }
+scale-codec = { package = "parity-scale-codec", workspace = true }
+scale-info = { workspace = true }
 
-codec = { package = "parity-scale-codec", version = "3.0.0", default-features = false }
-scale-info = { version = "2.0.0", default-features = false, features = ["derive"] }
-sp-io = { version = "6.0.0", git = "https://github.com/paritytech/substrate", branch = "master", default-features = false }
-sp-runtime = { version = "6.0.0", git = "https://github.com/paritytech/substrate", branch = "master", default-features = false }
-sp-std = { version = "4.0.0", git = "https://github.com/paritytech/substrate", branch = "master", default-features = false }
+# Substrate
+frame-support = { workspace = true }
+frame-system = { workspace = true }
+pallet-timestamp = { workspace = true }
+sp-io = { workspace = true }
+sp-runtime = { workspace = true }
+sp-std = { workspace = true }
 
-frame-support = { version = "4.0.0-dev", git = "https://github.com/paritytech/substrate", branch = "master", default-features = false }
-frame-system = { version = "4.0.0-dev", git = "https://github.com/paritytech/substrate", branch = "master", default-features = false }
-pallet-balances = { version = "4.0.0-dev", git = "https://github.com/paritytech/substrate", branch = "master", default-features = false }
-pallet-timestamp = { version = "4.0.0-dev", git = "https://github.com/paritytech/substrate", branch = "master", default-features = false }
-
-fp-consensus = { version = "2.0.0-dev", path = "../../primitives/consensus", default-features = false }
-fp-evm = { version = "3.0.0-dev", path = "../../primitives/evm", default-features = false }
-fp-rpc = { version = "3.0.0-dev", path = "../../primitives/rpc", default-features = false }
-fp-self-contained = { version = "1.0.0-dev", path = "../../primitives/self-contained", default-features = false }
-fp-storage = { version = "2.0.0", path = "../../primitives/storage", default-features = false }
-pallet-evm = { version = "6.0.0-dev", path = "../evm", default-features = false }
+# Frontier
+fp-consensus = { workspace = true }
+fp-ethereum = { workspace = true }
+fp-evm = { workspace = true }
+fp-rpc = { workspace = true }
+fp-storage = { workspace = true }
+pallet-evm = { workspace = true }
 
 [dev-dependencies]
-libsecp256k1 = { version = "0.7", features = ["static-context", "hmac"] }
-rustc-hex = { version = "2.1.0", default-features = false }
-sp-core = { version = "6.0.0", git = "https://github.com/paritytech/substrate", branch = "master" }
+hex = "0.4.3"
+libsecp256k1 = { workspace = true, features = ["static-context", "hmac"] }
+rlp = { workspace = true }
+# Substrate
+pallet-balances = { workspace = true, features = ["default"] }
+sp-core = { workspace = true, features = ["default"] }
+# Frontier
+fp-self-contained = { workspace = true, features = ["default"] }
 
 [features]
 default = ["std"]
-runtime-benchmarks = [
-	"frame-support/runtime-benchmarks",
-	"frame-system/runtime-benchmarks",
-]
 std = [
 	"ethereum/std",
-	"ethereum-types/std",
 	"evm/std",
+	"ethereum-types/std",
 	"rlp/std",
-	"serde",
-	"sha3/std",
-
-	"codec/std",
+	"scale-codec/std",
 	"scale-info/std",
+	# Substrate
+	"frame-support/std",
+	"frame-system/std",
+	"pallet-timestamp/std",
 	"sp-io/std",
 	"sp-runtime/std",
 	"sp-std/std",
-	"frame-support/std",
-	"frame-system/std",
-	"pallet-balances/std",
-	"pallet-timestamp/std",
-
+	# Frontier
 	"fp-consensus/std",
+	"fp-ethereum/std",
 	"fp-evm/std",
 	"fp-rpc/std",
 	"fp-self-contained/std",
 	"fp-storage/std",
 	"pallet-evm/std",
 ]
-try-runtime = ["frame-support/try-runtime"]
+runtime-benchmarks = [
+	"frame-support/runtime-benchmarks",
+	"frame-system/runtime-benchmarks",
+	"pallet-timestamp/runtime-benchmarks",
+	"pallet-evm/runtime-benchmarks",
+]
+try-runtime = [
+	"frame-support/try-runtime",
+	"frame-system/try-runtime",
+	"pallet-timestamp/try-runtime",
+	"pallet-evm/try-runtime",
+]
+forbid-evm-reentrancy = ["pallet-evm/forbid-evm-reentrancy"]

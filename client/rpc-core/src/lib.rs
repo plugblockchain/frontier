@@ -16,6 +16,8 @@
 // You should have received a copy of the GNU General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
+#![deny(unused_crate_dependencies)]
+
 pub mod types;
 
 mod eth;
@@ -24,8 +26,8 @@ mod net;
 mod web3;
 
 pub use self::{
-	eth::{EthApi, EthApiServer, EthFilterApi, EthFilterApiServer},
-	eth_pubsub::{EthPubSubApi, EthPubSubApiServer},
-	net::{NetApi, NetApiServer},
-	web3::{Web3Api, Web3ApiServer},
+	eth::{EthApiServer, EthFilterApiServer},
+	eth_pubsub::EthPubSubApiServer,
+	net::NetApiServer,
+	web3::Web3ApiServer,
 };

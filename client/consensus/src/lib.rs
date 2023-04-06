@@ -16,16 +16,18 @@
 // You should have received a copy of the GNU General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
+#![deny(unused_crate_dependencies)]
+
 use std::{collections::HashMap, marker::PhantomData, sync::Arc};
 
-use sc_client_api::{backend::AuxStore, BlockOf};
+// Substrate
 use sc_consensus::{BlockCheckParams, BlockImport, BlockImportParams, ImportResult};
 use sp_api::ProvideRuntimeApi;
 use sp_block_builder::BlockBuilder as BlockBuilderApi;
-use sp_blockchain::{well_known_cache_keys::Id as CacheKeyId, HeaderBackend};
+use sp_blockchain::well_known_cache_keys::Id as CacheKeyId;
 use sp_consensus::Error as ConsensusError;
 use sp_runtime::traits::{Block as BlockT, Header as HeaderT};
-
+// Frontier
 use fp_consensus::{ensure_log, FindLogError};
 use fp_rpc::EthereumRuntimeRPCApi;
 
@@ -81,11 +83,10 @@ impl<Block: BlockT, I: Clone + BlockImport<Block>, C> Clone for FrontierBlockImp
 impl<B, I, C> FrontierBlockImport<B, I, C>
 where
 	B: BlockT,
-	I: BlockImport<B, Transaction = sp_api::TransactionFor<C, B>> + Send + Sync,
+	I: BlockImport<B, Transaction = sp_api::TransactionFor<C, B>>,
 	I::Error: Into<ConsensusError>,
-	C: ProvideRuntimeApi<B> + Send + Sync + HeaderBackend<B> + AuxStore + BlockOf,
-	C::Api: EthereumRuntimeRPCApi<B>,
-	C::Api: BlockBuilderApi<B>,
+	C: ProvideRuntimeApi<B>,
+	C::Api: BlockBuilderApi<B> + EthereumRuntimeRPCApi<B>,
 {
 	pub fn new(inner: I, client: Arc<C>, backend: Arc<fc_db::Backend<B>>) -> Self {
 		Self {
@@ -103,9 +104,8 @@ where
 	B: BlockT,
 	I: BlockImport<B, Transaction = sp_api::TransactionFor<C, B>> + Send + Sync,
 	I::Error: Into<ConsensusError>,
-	C: ProvideRuntimeApi<B> + Send + Sync + HeaderBackend<B> + AuxStore + BlockOf,
-	C::Api: EthereumRuntimeRPCApi<B>,
-	C::Api: BlockBuilderApi<B>,
+	C: ProvideRuntimeApi<B> + Send + Sync,
+	C::Api: BlockBuilderApi<B> + EthereumRuntimeRPCApi<B>,
 {
 	type Error = ConsensusError;
 	type Transaction = sp_api::TransactionFor<C, B>;
@@ -125,7 +125,7 @@ where
 		// We validate that there are only one frontier log. No other
 		// actions are needed and mapping syncing is delegated to a separate
 		// worker.
-		ensure_log(&block.header.digest()).map_err(|e| Error::from(e))?;
+		ensure_log(block.header.digest()).map_err(Error::from)?;
 
 		self.inner
 			.import_block(block, new_cache)

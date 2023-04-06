@@ -18,6 +18,7 @@
 //! Core types and inherents for dynamic fee.
 
 #![cfg_attr(not(feature = "std"), no_std)]
+#![deny(unused_crate_dependencies)]
 
 use sp_core::U256;
 use sp_inherents::InherentIdentifier;
@@ -34,7 +35,7 @@ pub struct InherentDataProvider(pub InherentType);
 #[cfg(feature = "std")]
 #[async_trait::async_trait]
 impl sp_inherents::InherentDataProvider for InherentDataProvider {
-	fn provide_inherent_data(&self, inherent_data: &mut InherentData) -> Result<(), Error> {
+	async fn provide_inherent_data(&self, inherent_data: &mut InherentData) -> Result<(), Error> {
 		inherent_data.put_data(INHERENT_IDENTIFIER, &self.0)
 	}
 

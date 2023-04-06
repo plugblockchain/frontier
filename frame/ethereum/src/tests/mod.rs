@@ -15,8 +15,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use frame_support::{assert_err, assert_ok, unsigned::TransactionValidityError};
-use rustc_hex::{FromHex, ToHex};
+use frame_support::{
+	assert_err, assert_ok, dispatch::GetDispatchInfo, unsigned::TransactionValidityError,
+};
 use sp_runtime::{
 	traits::Applyable,
 	transaction_validity::{InvalidTransaction, ValidTransactionBuilder},
@@ -26,6 +27,7 @@ use std::str::FromStr;
 use crate::{
 	mock::*, CallOrCreateInfo, RawOrigin, Transaction, TransactionAction, H160, H256, U256,
 };
+use fp_self_contained::CheckedExtrinsic;
 
 mod eip1559;
 mod eip2930;

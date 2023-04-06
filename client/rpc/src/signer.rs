@@ -18,10 +18,11 @@
 
 use ethereum::TransactionV2 as EthereumTransaction;
 use ethereum_types::{H160, H256};
-use jsonrpc_core::Error;
-
-use fc_rpc_core::types::TransactionMessage;
+use jsonrpsee::core::Error;
+// Substrate
 use sp_core::hashing::keccak_256;
+// Frontier
+use fc_rpc_core::types::TransactionMessage;
 
 use crate::internal_err;
 
@@ -100,9 +101,11 @@ impl EthSigner for EthDevSigner {
 								gas_limit: m.gas_limit,
 								action: m.action,
 								value: m.value,
-								input: m.input.clone(),
+								input: m.input,
 								signature: ethereum::TransactionSignature::new(v, r, s)
-									.ok_or(internal_err("signer generated invalid signature"))?,
+									.ok_or_else(|| {
+										internal_err("signer generated invalid signature")
+									})?,
 							}));
 					}
 					TransactionMessage::EIP2930(m) => {
@@ -155,6 +158,6 @@ impl EthSigner for EthDevSigner {
 			}
 		}
 
-		transaction.ok_or(internal_err("signer not available"))
+		transaction.ok_or_else(|| internal_err("signer not available"))
 	}
 }

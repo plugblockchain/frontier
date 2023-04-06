@@ -1,20 +1,26 @@
 [package]
 name = "fp-dynamic-fee"
 version = "1.0.0"
-authors = ["Parity Technologies <admin@parity.io"]
-edition = "2021"
-description = "Dynamic fee inherent primitives for Ethereum RPC (web3) compatibility layer for Substrate."
 license = "Apache-2.0"
+description = "Dynamic fee inherent primitives for Ethereum RPC (web3) compatibility layer for Substrate."
+authors = { workspace = true }
+edition = { workspace = true }
+repository = { workspace = true }
+
+[package.metadata.docs.rs]
+targets = ["x86_64-unknown-linux-gnu"]
 
 [dependencies]
-async-trait = "0.1"
-
-sp-core = { version = "6.0.0", git = "https://github.com/paritytech/substrate", branch = "master", default-features = false }
-sp-inherents = { version = "4.0.0-dev", git = "https://github.com/paritytech/substrate", branch = "master", default-features = false }
+async-trait = { version = "0.1", optional = true }
+# Substrate
+sp-core = { workspace = true }
+sp-inherents = { workspace = true }
 
 [features]
 default = ["std"]
 std = [
+	"async-trait",
+	# Substrate
 	"sp-core/std",
 	"sp-inherents/std",
 ]

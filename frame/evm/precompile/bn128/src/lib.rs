@@ -16,24 +16,34 @@
 // limitations under the License.
 
 #![cfg_attr(not(feature = "std"), no_std)]
+#![deny(unused_crate_dependencies)]
 
 extern crate alloc;
 
 use alloc::vec::Vec;
 use fp_evm::{
-	Context, ExitError, ExitSucceed, Precompile, PrecompileFailure, PrecompileOutput,
+	ExitError, ExitSucceed, Precompile, PrecompileFailure, PrecompileHandle, PrecompileOutput,
 	PrecompileResult,
 };
 use sp_core::U256;
 
-fn read_fr(input: &[u8], start_inx: usize) -> Result<bn::Fr, PrecompileFailure> {
-	if input.len() < start_inx + 32 {
-		return Err(PrecompileFailure::Error {
-			exit_status: ExitError::Other("Input not long enough".into()),
-		});
+/// Copy bytes from input to target.
+fn read_input(source: &[u8], target: &mut [u8], offset: usize) {
+	// Out of bounds, nothing to copy.
+	if source.len() <= offset {
+		return;
 	}
 
-	bn::Fr::from_slice(&input[start_inx..(start_inx + 32)]).map_err(|_| PrecompileFailure::Error {
+	// Find len to copy up to target len, but not out of bounds.
+	let len = core::cmp::min(target.len(), source.len() - offset);
+	target[..len].copy_from_slice(&source[offset..][..len]);
+}
+
+fn read_fr(input: &[u8], start_inx: usize) -> Result<bn::Fr, PrecompileFailure> {
+	let mut buf = [0u8; 32];
+	read_input(input, &mut buf, start_inx);
+
+	bn::Fr::from_slice(&buf).map_err(|_| PrecompileFailure::Error {
 		exit_status: ExitError::Other("Invalid field element".into()),
 	})
 }
@@ -41,22 +51,19 @@ fn read_fr(input: &[u8], start_inx: usize) -> Result<bn::Fr, PrecompileFailure> 
 fn read_point(input: &[u8], start_inx: usize) -> Result<bn::G1, PrecompileFailure> {
 	use bn::{AffineG1, Fq, Group, G1};
 
-	if input.len() < start_inx + 64 {
-		return Err(PrecompileFailure::Error {
-			exit_status: ExitError::Other("Input not long enough".into()),
-		});
-	}
+	let mut px_buf = [0u8; 32];
+	let mut py_buf = [0u8; 32];
+	read_input(input, &mut px_buf, start_inx);
+	read_input(input, &mut py_buf, start_inx + 32);
 
-	let px = Fq::from_slice(&input[start_inx..(start_inx + 32)]).map_err(|_| {
-		PrecompileFailure::Error {
-			exit_status: ExitError::Other("Invalid point x coordinate".into()),
-		}
+	let px = Fq::from_slice(&px_buf).map_err(|_| PrecompileFailure::Error {
+		exit_status: ExitError::Other("Invalid point x coordinate".into()),
 	})?;
-	let py = Fq::from_slice(&input[(start_inx + 32)..(start_inx + 64)]).map_err(|_| {
-		PrecompileFailure::Error {
-			exit_status: ExitError::Other("Invalid point y coordinate".into()),
-		}
+
+	let py = Fq::from_slice(&py_buf).map_err(|_| PrecompileFailure::Error {
+		exit_status: ExitError::Other("Invalid point y coordinate".into()),
 	})?;
+
 	Ok(if px == Fq::zero() && py == Fq::zero() {
 		G1::zero()
 	} else {
@@ -76,13 +83,12 @@ impl Bn128Add {
 }
 
 impl Precompile for Bn128Add {
-	fn execute(
-		input: &[u8],
-		_target_gas: Option<u64>,
-		_context: &Context,
-		_is_static: bool,
-	) -> PrecompileResult {
+	fn execute(handle: &mut impl PrecompileHandle) -> PrecompileResult {
 		use bn::AffineG1;
+
+		handle.record_cost(Bn128Add::GAS_COST)?;
+
+		let input = handle.input();
 
 		let p1 = read_point(input, 0)?;
 		let p2 = read_point(input, 64)?;
@@ -108,9 +114,7 @@ impl Precompile for Bn128Add {
 
 		Ok(PrecompileOutput {
 			exit_status: ExitSucceed::Returned,
-			cost: Bn128Add::GAS_COST,
 			output: buf.to_vec(),
-			logs: Default::default(),
 		})
 	}
 }
@@ -123,13 +127,12 @@ impl Bn128Mul {
 }
 
 impl Precompile for Bn128Mul {
-	fn execute(
-		input: &[u8],
-		_target_gas: Option<u64>,
-		_context: &Context,
-		_is_static: bool,
-	) -> PrecompileResult {
+	fn execute(handle: &mut impl PrecompileHandle) -> PrecompileResult {
 		use bn::AffineG1;
+
+		handle.record_cost(Bn128Mul::GAS_COST)?;
+
+		let input = handle.input();
 
 		let p = read_point(input, 0)?;
 		let fr = read_fr(input, 64)?;
@@ -155,9 +158,7 @@ impl Precompile for Bn128Mul {
 
 		Ok(PrecompileOutput {
 			exit_status: ExitSucceed::Returned,
-			cost: Bn128Mul::GAS_COST,
 			output: buf.to_vec(),
-			logs: Default::default(),
 		})
 	}
 }
@@ -172,29 +173,28 @@ impl Bn128Pairing {
 }
 
 impl Precompile for Bn128Pairing {
-	fn execute(
-		input: &[u8],
-		target_gas: Option<u64>,
-		_context: &Context,
-		_is_static: bool,
-	) -> PrecompileResult {
+	fn execute(handle: &mut impl PrecompileHandle) -> PrecompileResult {
 		use bn::{pairing_batch, AffineG1, AffineG2, Fq, Fq2, Group, Gt, G1, G2};
 
-		let (ret_val, gas_cost) = if input.is_empty() {
-			(U256::one(), Bn128Pairing::BASE_GAS_COST)
+		let ret_val = if handle.input().is_empty() {
+			handle.record_cost(Bn128Pairing::BASE_GAS_COST)?;
+			U256::one()
 		} else {
+			if handle.input().len() % 192 > 0 {
+				return Err(PrecompileFailure::Error {
+					exit_status: ExitError::Other("bad elliptic curve pairing size".into()),
+				});
+			}
+
 			// (a, b_a, b_b - each 64-byte affine coordinates)
-			let elements = input.len() / 192;
+			let elements = handle.input().len() / 192;
 
 			let gas_cost: u64 = Bn128Pairing::BASE_GAS_COST
 				+ (elements as u64 * Bn128Pairing::GAS_COST_PER_PAIRING);
-			if let Some(gas_left) = target_gas {
-				if gas_left < gas_cost {
-					return Err(PrecompileFailure::Error {
-						exit_status: ExitError::OutOfGas,
-					});
-				}
-			}
+
+			handle.record_cost(gas_cost)?;
+
+			let input = handle.input();
 
 			let mut vals = Vec::new();
 			for idx in 0..elements {
@@ -276,9 +276,9 @@ impl Precompile for Bn128Pairing {
 			let mul = pairing_batch(&vals);
 
 			if mul == Gt::one() {
-				(U256::one(), gas_cost)
+				U256::one()
 			} else {
-				(U256::zero(), gas_cost)
+				U256::zero()
 			}
 		};
 
@@ -287,9 +287,7 @@ impl Precompile for Bn128Pairing {
 
 		Ok(PrecompileOutput {
 			exit_status: ExitSucceed::Returned,
-			cost: gas_cost,
 			output: buf.to_vec(),
-			logs: Default::default(),
 		})
 	}
 }

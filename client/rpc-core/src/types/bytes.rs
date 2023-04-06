@@ -26,7 +26,7 @@ use serde::{
 use std::fmt;
 
 /// Wrapper structure around vector of bytes.
-#[derive(Debug, PartialEq, Eq, Default, Hash, Clone)]
+#[derive(Clone, Debug, Default, Eq, PartialEq, Hash)]
 pub struct Bytes(pub Vec<u8>);
 
 impl Bytes {
@@ -46,9 +46,9 @@ impl From<Vec<u8>> for Bytes {
 	}
 }
 
-impl Into<Vec<u8>> for Bytes {
-	fn into(self) -> Vec<u8> {
-		self.0
+impl From<Bytes> for Vec<u8> {
+	fn from(bytes: Bytes) -> Vec<u8> {
+		bytes.0
 	}
 }
 
@@ -107,7 +107,6 @@ impl<'a> Visitor<'a> for BytesVisitor {
 #[cfg(test)]
 mod tests {
 	use super::*;
-	use rustc_hex::FromHex;
 
 	#[test]
 	fn test_bytes_serialize() {
